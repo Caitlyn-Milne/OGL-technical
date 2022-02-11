@@ -1,0 +1,280 @@
+//I completed this in 2 different ways,
+//METHOD 1 - sequential: this way creates more of a list of instructions on how to get the final result
+//METHOD 2 - simultaneous: this way is abit more complicated, and treats the functions as messages/commands to the devices
+
+//the reason for this is method 1 is a simplier way of understanding how the production line works, while method 2 is faster as it can do multiple actions at once.
+
+//instances of devices and their functions
+conveyorControl;
+start();
+stop();
+
+sensor1;
+sensor2;
+detected();
+
+manipulationArm1;
+manipulationArm2;
+extend();
+retract();
+
+sonar;
+examine();
+
+radiation;
+detect();
+
+//assumed methods
+wait(seconds);
+
+Log;
+error(errorMessage);
+
+//pseudo code
+
+//METHOD 1 - sequence
+//assuming every command causes the code to wait for the result
+
+//Pros
+//-simple to understand pseudo code
+
+//Cons
+//-cannot multi task
+//-takes long time to process container
+//-Due to failsafe manupulation arms open, it takes alittle longer to process, as it waits for each arm to extend and retract
+
+//notes
+//cannot actually multitask
+//the arms extend before sonar and radition does it checks, this is to provide failsafe failed condition, reducing chance of contaminated containers getting through, but does add time
+//it takes upto 60.1 seconds to process 1 container
+//note taking more then 60 seconds can lead to backups on worse case scenerio
+
+isRunning = true;
+arm1Extended = false;
+arm2Extended = false;
+
+function main() {
+  while (isRunning) {
+    loop();
+    wait(0.1); //just to prevent it using 100% processing power untill the next task, possibly change this if it causes backups
+  }
+}
+
+function loop() {
+  conveyorControl.start();
+  shapeCheckLoop();
+  radiationCheckLoop();
+}
+
+function shapeCheckLoop() {
+  if (sensor1.detected() == 1) {
+    conveyorControl.stop();
+
+    if (!arm1Extended) {
+      extendArm1();
+    }
+
+    sonarResult = sonar.examine();
+    if (sonarResult == "OK") {
+      manipulationArm1.retract();
+    }
+
+    conveyorControl.start();
+  }
+}
+function radiationCheckLoop() {
+  if (sensor2.detected() == 1) {
+    conveyorControl.stop();
+
+    if (!arm2Extended) {
+      extendArm2();
+    }
+
+    radiationResult = radiation.detect();
+    if (radiationResult <= 20) {
+      manipulationArm1.retract();
+    }
+    conveyorControl.start();
+  }
+}
+
+function extendArm1() {
+  manipulationArm1.extend();
+  arm1Extended = true;
+}
+
+function extendArm2() {
+  manipulationArm2.extend();
+  arm2Extended = true;
+}
+
+function retractArm1() {
+  manipulationArm1.retract();
+  arm1Extended = false;
+}
+function retractArm2() {
+  manipulationArm2.retract();
+  arm2Extended = false;
+}
+
+//Method 2 - simuationious
+//assuming every commands doesnt delay the program, commands to devices are treated as promises (probably how it would actually be),
+//there is also an assumption that the promise only calls then on successful actions
+//with this there is also the assumption that commands that set state instantly callback if already in that state (if arm already extended, instantly call the callback)
+
+//notes
+//you could add an identifier to the error messages to show which exact device broke down
+//this could possibiliy further optimised, but this is probably abit extreme for pseudo code
+
+//main
+isRunning = true;
+
+//could be lambda, interface, delegate etc.. depening on the language and design pattern;
+void ResponseCallback(string);
+
+function main() {
+  startConveyor(conveyorControl, null);
+  //you could put this in a thread
+  while (isRunning) {
+    loop();
+    wait(0.1); //just to prevent it using 100% processing power untill the next task
+  }
+}
+function loop() {
+  shapeCheck();
+  radiationCheck();
+}
+
+//shape check
+function shapeCheck() {
+  checkSensor(sensor1, function (response) {
+    if (response == 1) {
+      startSonarScan();
+    }
+  });
+}
+
+function startSonarScan() {
+  stopConveyor(conveyorControl, null);
+  extendArm(manipulationArm1, null); //there is an assumption here that the arm will never take longer then the sonar, as clarified by specs
+  sonarExamine(sonar, sonarResponseCallback);
+}
+
+function sonarResponseCallback(response) {
+  if (response == "OK") {
+    //retract arm if passed check, when complete start conveyor
+    retractArm(manipulationArm1, function (ignored) {
+      startConveyor(conveyorControl, null);
+    });
+  } else {
+    startConveyor(conveyorControl, null);
+  }
+}
+//
+
+//radiationCheck check
+function radiationCheck() {
+  checkSensor(sensor2, function (response) {
+    if (response == 1) {
+      startRadiationDetector();
+    }
+  });
+}
+
+function startRadiationDetector() {
+  stopConveyor(conveyorControl, null);
+  extendArm(manipulationArm2, null);
+  detectRadiation(radiation, radiationResponseCallback);
+}
+
+function radiationResponseCallback(response) {
+  if (parseInt(response) <= 20) {
+    //retract arm, when complete start conveyor
+    retractArm(manipulationArm2, function (ignored) {
+      startConveyor(conveyorControl, null);
+    });
+  } else {
+    startConveyor(conveyorControl, null);
+  }
+}
+//
+
+function InvokeResponseCallback(callback, response) {
+  if (callback != null) {
+    callback(response);
+  }
+}
+
+//send commands
+function startConveyor(conveyorControl, onCompleteCallback = null) {
+  conveyorControl
+    .start()
+    .then((response) => {
+      InvokeResponseCallback(onCompleteCallback, response);
+    })
+    .catch(systemShutDown("error when starting conveyor"));
+}
+
+function stopConveyor(conveyorControl, onCompleteCallback = null) {
+  conveyorControl
+    .stop()
+    .then((response) => {
+      InvokeResponseCallback(onCompleteCallback, response);
+    })
+    .catch(systemShutDown("error when stopping conveyor"));
+}
+
+function checkSensor(sensor, onCompleteCallback = null) {
+  sensor
+    .detected()
+    .then((response) => {
+      InvokeResponseCallback(onCompleteCallback, response);
+    })
+    .catch(systemShutDown("sensor error"));
+}
+
+function extendArm(arm, onCompleteCallback = null) {
+  arm
+    .extend()
+    .then((response) => {
+      InvokeResponseCallback(onCompleteCallback, response);
+    })
+    .catch(systemShutDown("manipulation arm error when extending arm"));
+}
+
+function retractArm(arm, onCompleteCallback = null) {
+  arm
+    .retract()
+    .then((response) => {
+      InvokeResponseCallback(onCompleteCallback, response);
+    })
+    .catch(systemShutDown("manipulation arm error when retracting arm"));
+}
+
+function sonarExamine(sonar, onCompleteCallback = null) {
+  sonar
+    .examine()
+    .then((response) => {
+      InvokeResponseCallback(onCompleteCallback, response);
+    })
+    .catch(systemShutDown("sonar error"));
+}
+
+function detectRadiation(radiationDetector, onCompleteCallback = null) {
+  radiationDetector
+    .detect()
+    .then((response) => {
+      InvokeResponseCallback(onCompleteCallback, response);
+    })
+    .catch(systemShutDown("radiation detector error"));
+}
+//
+
+function systemShutdown(errorMessage) {
+  //stops the conveyor before shutting down, but also checks in case the error came from trying to stop the conveyor
+  if (errorMessage != "error when stopping conveyor") {
+    stopConveyor();
+  }
+  Log.error(errorMessage);
+  isRunning = false;
+}
